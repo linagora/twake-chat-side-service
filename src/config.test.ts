@@ -21,10 +21,28 @@ describe('loadConfig', () => {
       LDAP_UID_ATTRIBUTE: 'uid',
       ASSISTANTS_SCOPE: 'openid',
       ASSISTANTS_REQUESTS_PER_MINUTE: 60,
+      ANALYTICS_BATCHES_PER_MINUTE: 60,
       HTTP_HOST: '0.0.0.0',
       HTTP_PORT: 8080,
       LOG_LEVEL: 'info'
     })
+  })
+
+  it('reads the broker and the organization attribute, both optional', () => {
+    expect(loadConfig(REQUIRED)).not.toHaveProperty('AMQP_URL')
+    expect(
+      loadConfig({
+        ...REQUIRED,
+        AMQP_URL: 'amqp://rabbitmq:5672',
+        LDAP_ORG_ATTRIBUTE: 'twakeOrganization'
+      })
+    ).toMatchObject({
+      AMQP_URL: 'amqp://rabbitmq:5672',
+      LDAP_ORG_ATTRIBUTE: 'twakeOrganization'
+    })
+    expect(() => loadConfig({ ...REQUIRED, AMQP_URL: 'http://x' })).toThrow(
+      'AMQP_URL'
+    )
   })
 
   it('takes an empty variable as unset', () => {

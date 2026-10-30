@@ -64,6 +64,8 @@ override must keep the `--import`, or Sentry gets nothing.
   credential (see [Public pages](#public-pages)). They have no rate limit of
   their own and a request may cost several reads of Synapse: a limit per IP at
   the ingress is required before they are exposed.
+- `POST /analytics/events`: the product analytics of Twake Chat (see
+  [Analytics](#analytics)), with the OpenID token like the routes above.
 - Liveness: `GET /health/live`.
 - Readiness: `GET /health/ready`, 503 while Postgres does not answer within
   2 seconds.
@@ -90,6 +92,12 @@ All required unless a default is given.
   is required with a DN.
 - `LDAP_UID_ATTRIBUTE`: the attribute that holds the Matrix localpart, `uid`
   by default.
+- `LDAP_ORG_ATTRIBUTE` (optional): the attribute that holds the id of the
+  organization of the user, sent as `twakeorg` with the analytics. Without it,
+  no event carries one.
+- `AMQP_URL` (optional, secret): the RabbitMQ of twake-user-activity, for
+  example `amqp://user:secret@rabbitmq:5672`. Without it, the analytics route
+  answers 202 and publishes nothing.
 - `ASSISTANTS_URL`, `ASSISTANTS_TOKEN_URL`, `ASSISTANTS_CLIENT_ID`,
   `ASSISTANTS_CLIENT_SECRET`: all four or none, to serve the assistants (see
   [Assistants](#assistants)). Without them, the assistant routes answer 404.
@@ -97,6 +105,9 @@ All required unless a default is given.
   default (LemonLDAP-NG refuses a request without one).
 - `ASSISTANTS_REQUESTS_PER_MINUTE`: the assistant calls a user may make per
   minute and replica, 60 by default.
+- `ANALYTICS_BATCHES_PER_MINUTE`: the analytics batches a user may send per
+  minute and replica, 60 by default. Twake Chat sends at most one every 5 seconds per
+  open tab, and one when a tab is hidden.
 - `PUBLIC_PAGES_URL`, `CHAT_URL`: both or none, to serve the public pages: the
   public address of this service, for the links of the pages and the sitemap,
   and the address of Twake Chat, where « React in Twake Chat » opens the room.
@@ -122,8 +133,10 @@ three keys, with the same URL:
 - `livekit_base_url`: the one Twake Chat reads for the calls (the Flutter
   client reads only this one, the React client reads both);
 - `livekit_service_url`: the one of the MatrixRTC clients of Element;
-- `assistants.base_url` of the `app.twake.chat` object: the one Twake Chat
-  reads for the assistants. Without it, Twake Chat shows no assistant.
+- `side_service.base_url` of the `app.twake.chat` object: the one Twake Chat
+  reads for the assistants and the analytics (it falls back to the former
+  `assistants.base_url`). Without either, Twake Chat shows no assistant and
+  sends no analytics.
 
 ```json
 {
@@ -135,7 +148,7 @@ three keys, with the same URL:
     }
   ],
   "app.twake.chat": {
-    "assistants": { "base_url": "https://chat-side.example.com" }
+    "side_service": { "base_url": "https://chat-side.example.com" }
   }
 }
 ```
@@ -219,6 +232,43 @@ To serve them:
 - Its client id in `PROVISIONER_CLIENT_IDS` of the harness, which admits the
   provisioners by the subject of their token.
 - The network: the service reaches APISIX and the token endpoint.
+
+## Analytics
+
+`POST /analytics/events` takes the batches of events that Twake Chat collects
+(`{ app, version, events: [{ name, properties, view?, at }] }`, at most 200
+events) and publishes each as a CloudEvent `com.twake.chat.user.active.v1` on
+the `user-activity` exchange, where twake-user-activity forwards it to PostHog.
+
+- The browser decides on the consent: the service cannot read the account data
+  and publishes whatever an authenticated user sends. Twake Chat sends nothing
+  without the consent of the user.
+- The user is the one of the OpenID token (`Authorization: Bearer` and
+  `x-matrix-server-name`, a 401 otherwise). A body that is no object with an `events` array of 200 at most answers 400; a
+  bad event (name, date) is dropped alone and the others published, with one
+  warning that counts them.
+  Otherwise the answer is 202 at once: the directory and the broker are never
+  waited for, and a failed publish is logged and lost, as the bridge allows.
+- More than `ANALYTICS_BATCHES_PER_MINUTE` batches of a user in a minute answer
+  429 with `Retry-After`; Twake Chat drops that batch.
+- While the broker lags, at most 1000 events wait per replica; the others are
+  dropped and counted in one warning a minute (`dropped`), even if the broker
+  never comes back.
+- `twakeactor` is the `mail` of the user in LDAP, `twakeactorid` its
+  `entryUUID` and `twakeorg` the `LDAP_ORG_ATTRIBUTE`, when set. A user with no
+  mail publishes nothing. The `bot_` and `hermes_` accounts publish nothing
+  either. Each replica keeps a directory entry 5 minutes.
+- Properties keep the flat values (text cut to 200 characters, number, boolean,
+  null) and drop the nested ones; `view` and the version of the app join them as
+  `view` and `appVersion`. An event older than 24 hours or more than 5 minutes
+  ahead is dropped.
+- Of `data`, only `action`, `category` and `platform` reach PostHog today,
+  with `twakeorg`, and the user is known by `twakeactor`. twake-user-activity
+  reads `data` with a strict schema and drops `data.properties` (with `view`
+  and `appVersion`) until it forwards them.
+- The exchange is declared as a durable topic exchange, as the bridge does, at
+  the first publish. The bridge must have started once, or the exchange routes
+  to no queue. Readiness does not depend on the broker.
 
 ## Public pages
 

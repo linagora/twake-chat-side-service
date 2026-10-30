@@ -1,5 +1,6 @@
 import { pino } from 'pino'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { DirectoryEntry } from './directory.ts'
 import { createServer } from './http.ts'
 import type { CallToken, Participant } from './meet.ts'
 import { registerSfuGet, type SfuDeps } from './sfu-get.ts'
@@ -38,14 +39,12 @@ function fakes() {
       )
     },
     directory: {
-      entry: vi.fn<
-        (
-          uid: string
-        ) => Promise<{ email: string | null; twakeInstance: string | null }>
-      >(() =>
+      entry: vi.fn<(uid: string) => Promise<DirectoryEntry>>(() =>
         Promise.resolve({
           email: 'alice@example.org',
-          twakeInstance: 'https://alice.example.org'
+          twakeInstance: 'https://alice.example.org',
+          actorId: null,
+          org: null
         })
       )
     },
@@ -183,7 +182,9 @@ describe('POST /sfu/get', () => {
   it('leaves the Twake instance out when the directory has none', async () => {
     deps.directory.entry.mockResolvedValueOnce({
       email: 'alice@example.org',
-      twakeInstance: null
+      twakeInstance: null,
+      actorId: null,
+      org: null
     })
     await ask(BODY)
 
@@ -306,7 +307,9 @@ describe('POST /sfu/get', () => {
   it('refuses a user without a single email in the directory, or one Meet will not act for', async () => {
     deps.directory.entry.mockResolvedValueOnce({
       email: null,
-      twakeInstance: null
+      twakeInstance: null,
+      actorId: null,
+      org: null
     })
     expect(await refusal(BODY)).toEqual([403, 'M_FORBIDDEN'])
     expect(deps.meet.livekitToken).not.toHaveBeenCalled()

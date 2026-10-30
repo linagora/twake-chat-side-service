@@ -8,6 +8,8 @@ export interface DirectorySettings {
   bindDn: string | null
   bindPassword: string
   uidAttribute: string
+  /** The attribute that holds the id of the organization, when the directory has one. */
+  orgAttribute?: string
 }
 
 /** What Meet needs of a user and the directory knows. */
@@ -16,6 +18,10 @@ export interface DirectoryEntry {
   email: string | null
   /** The Twake Workplace instance of the user, where Meet saves the recordings. */
   twakeInstance: string | null
+  /** The `entryUUID` of the entry, which product analytics call the actor id. */
+  actorId: string | null
+  /** The organization of the user, read from `orgAttribute`. */
+  org: string | null
 }
 
 /** An attribute with one value, or none when it has several. */
@@ -29,7 +35,8 @@ function single(value: unknown): string | null {
 
 /** The entry, read whatever case the server writes the attribute names in. */
 export function readEntry(
-  entry: Record<string, unknown> | undefined
+  entry: Record<string, unknown> | undefined,
+  orgAttribute?: string
 ): DirectoryEntry {
   const attributes = new Map(
     Object.entries(entry ?? {}).map(([name, value]) => [
@@ -42,7 +49,9 @@ export function readEntry(
   return {
     email: attribute('mail')?.toLowerCase() ?? null,
     // `workspaceUrl` is the older name of `twakeWorkspaceUrl`
-    twakeInstance: attribute('twakeworkspaceurl') ?? attribute('workspaceurl')
+    twakeInstance: attribute('twakeworkspaceurl') ?? attribute('workspaceurl'),
+    actorId: attribute('entryuuid'),
+    org: orgAttribute ? attribute(orgAttribute.toLowerCase()) : null
   }
 }
 
@@ -55,7 +64,8 @@ export class Directory {
   }
 
   async entry(uid: string): Promise<DirectoryEntry> {
-    const { url, base, bindDn, bindPassword, uidAttribute } = this.#settings
+    const { url, base, bindDn, bindPassword, uidAttribute, orgAttribute } =
+      this.#settings
     const client = new Client({
       url,
       timeout: UPSTREAM_TIMEOUT_MS,
@@ -68,11 +78,17 @@ export class Directory {
       const { searchEntries } = await client.search(base, {
         scope: 'sub',
         filter: new EqualityFilter({ attribute: uidAttribute, value: uid }),
-        attributes: ['mail', 'twakeWorkspaceUrl', 'workspaceUrl']
+        attributes: [
+          'mail',
+          'twakeWorkspaceUrl',
+          'workspaceUrl',
+          'entryUUID',
+          ...(orgAttribute ? [orgAttribute] : [])
+        ]
       })
       const [entry] = searchEntries.length === 1 ? searchEntries : []
 
-      return readEntry(entry)
+      return readEntry(entry, orgAttribute)
     } catch (err) {
       throw new UpstreamError(
         'directory',

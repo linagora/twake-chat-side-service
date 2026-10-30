@@ -204,7 +204,7 @@ async function relay(
 }
 
 /** The OpenID token and the server that issued it, from the headers. */
-function tokenOf(request: FastifyRequest): {
+export function tokenOf(request: FastifyRequest): {
   accessToken: string
   matrixServerName: string
 } {

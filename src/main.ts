@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createLogger } from '@linagora/twake-node-telemetry'
 import * as Sentry from '@sentry/node'
 import postgres from 'postgres'
+import { amqpPublisher, registerAnalytics } from './analytics.ts'
 import { RateLimit, registerAssistants } from './assistants.ts'
 import { CallRooms } from './call-rooms.ts'
 import { loadConfig } from './config.ts'
@@ -56,17 +57,19 @@ const server = createServer({
     ])
 })
 const openId = new OpenId(config.MATRIX_HOMESERVER_URL)
+const directory = new Directory({
+  url: config.LDAP_URL,
+  base: config.LDAP_BASE,
+  bindDn: config.LDAP_BIND_DN ?? null,
+  bindPassword: config.LDAP_BIND_PASSWORD ?? '',
+  uidAttribute: config.LDAP_UID_ATTRIBUTE,
+  ...(config.LDAP_ORG_ATTRIBUTE && { orgAttribute: config.LDAP_ORG_ATTRIBUTE })
+})
 registerSfuGet(server, {
   serverName: config.MATRIX_SERVER_NAME,
   openId,
   homeserver: new Homeserver(config.MATRIX_HOMESERVER_URL, config.AS_TOKEN),
-  directory: new Directory({
-    url: config.LDAP_URL,
-    base: config.LDAP_BASE,
-    bindDn: config.LDAP_BIND_DN ?? null,
-    bindPassword: config.LDAP_BIND_PASSWORD ?? '',
-    uidAttribute: config.LDAP_UID_ATTRIBUTE
-  }),
+  directory,
   meet: new Meet({
     url: config.MEET_URL,
     clientId: config.MEET_CLIENT_ID,
@@ -74,6 +77,24 @@ registerSfuGet(server, {
     serviceAccountEmail: config.MEET_SERVICE_ACCOUNT_EMAIL
   }),
   callRooms
+})
+registerAnalytics(server, {
+  serverName: config.MATRIX_SERVER_NAME,
+  openId,
+  directory,
+  publisher: config.AMQP_URL
+    ? // The client logs each publish at info and its payload, mail included
+      // as twakeactor, at debug (linagora/rabbitmq-client#25): its warnings
+      // only. twakeactor is redacted by twake-node-telemetry (1.2.0).
+      amqpPublisher(
+        config.AMQP_URL,
+        logger.child(
+          {},
+          { level: logger.levelVal > 40 ? logger.level : 'warn' }
+        )
+      )
+    : null,
+  rateLimit: new RateLimit(config.ANALYTICS_BATCHES_PER_MINUTE)
 })
 const {
   ASSISTANTS_URL: url,
