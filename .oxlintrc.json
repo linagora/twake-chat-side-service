@@ -1,8 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "typescript"
-  ],
+  "plugins": ["typescript"],
   "categories": {
     "correctness": "off"
   },
@@ -14,11 +12,7 @@
     "es2024": true,
     "node": true
   },
-  "ignorePatterns": [
-    "dist/",
-    "coverage/",
-    "node_modules/"
-  ],
+  "ignorePatterns": ["dist/", "coverage/", "node_modules/"],
   "rules": {
     "for-direction": "error",
     "no-array-constructor": "error",
@@ -155,10 +149,7 @@
         "allowRegExp": false
       }
     ],
-    "typescript/return-await": [
-      "error",
-      "error-handling-correctness-only"
-    ],
+    "typescript/return-await": ["error", "error-handling-correctness-only"],
     "typescript/triple-slash-reference": "error",
     "typescript/unbound-method": "error",
     "typescript/unified-signatures": "error",
