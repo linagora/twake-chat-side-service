@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "eslint .",
+    "lint": "oxlint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
@@ -23,7 +23,7 @@
     "@linagora/rabbitmq-client": "^0.7.2",
     "@linagora/twake-css": "^1.0.0",
     "@linagora/twake-node-telemetry": "^1.2.0",
-    "@sentry/node": "^11.9.0",
+    "@sentry/node": "^10.78.0",
     "fastify": "^5.12.7",
     "ldapts": "^9.2.0",
     "markdown-it": "^15.0.3",
@@ -33,14 +33,13 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.19.2",
     "@types/sanitize-html": "^2.16.2",
-    "eslint": "^10.13.0",
+    "oxlint": "^1.90.0",
+    "oxlint-tsgolint": "^7.0.2005",
     "prettier": "^3.9.10",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5"
   }
 }
