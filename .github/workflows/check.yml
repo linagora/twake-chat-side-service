@@ -23,7 +23,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --no-fund
-      - run: npm audit
+      # Moderate advisories pass until @sentry/node depends on glob 14.0.2 or later
+      # (getsentry/sentry-javascript#25981): back to a plain npm audit then
+      - run: npm audit --audit-level=high
       - name: Start PostgreSQL for the tests
         run: |
           docker run -d --name postgres -p 5432:5432 \
