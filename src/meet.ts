@@ -36,7 +36,11 @@ export class Meet {
     this.#url = settings.url.replace(/\/+$/, '')
   }
 
-  /** A room owned by the service account, restricted: nobody enters it through the interface of Meet. */
+  /**
+   * A room owned by the service account, restricted: nobody enters it through the interface of Meet.
+   * Any participant of the call may record it: the owner is no human, so the default
+   * (owners and administrators) would let nobody.
+   */
   async createRoom(): Promise<string> {
     const token = await this.#applicationToken(
       this.#settings.serviceAccountEmail
@@ -44,7 +48,14 @@ export class Meet {
     const body = await readJson(
       'meet',
       ROOMS_PATH,
-      await this.#post(ROOMS_PATH, { access_level: 'restricted' }, token)
+      await this.#post(
+        ROOMS_PATH,
+        {
+          access_level: 'restricted',
+          configuration: { screen_recording_permission: 'authenticated' }
+        },
+        token
+      )
     )
     if (typeof body.id !== 'string' || !body.id) {
       throw new UpstreamError('meet', `${ROOMS_PATH} answered no room id`)
