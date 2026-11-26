@@ -1,11 +1,14 @@
 # Synapse registration of the service (app_service_config_files).
-# The service uses as_token only (AS_TOKEN). Synapse requires an hs_token too:
-# any secret, the service never receives a request from Synapse.
+# The service calls Synapse with the as_token (AS_TOKEN). Synapse requires an
+# hs_token too: any secret, which the service only reads (HS_TOKEN) when it
+# receives the events of Synapse (see `url`).
 id: twake-chat-side-service
 as_token: '<AS_TOKEN>'
 hs_token: '<another secret>'
 sender_localpart: _twake_chat_side_service
-# No events
+# No events. To publish the activity of Twake Chat (docs/deploy.md), the
+# address of the service as Synapse reaches it, for example
+# http://twake-chat-side-service:8080, with HS_TOKEN and AMQP_URL set.
 url: null
 # The service calls the homeserver on every token request.
 rate_limited: false
