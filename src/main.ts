@@ -2,8 +2,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createLogger } from '@linagora/twake-node-telemetry'
 import * as Sentry from '@sentry/node'
 import postgres from 'postgres'
-import { amqpPublisher, registerAnalytics } from './analytics.ts'
+import { ANALYTICS_EXCHANGE, registerAnalytics } from './analytics.ts'
 import { RateLimit, registerAssistants } from './assistants.ts'
+import { amqpClient, publisherOn } from './broker.ts'
 import { CallRooms } from './call-rooms.ts'
 import { loadConfig } from './config.ts'
 import { Directory } from './directory.ts'
@@ -82,14 +83,17 @@ registerAnalytics(server, {
   serverName: config.MATRIX_SERVER_NAME,
   openId,
   publisher: config.AMQP_URL
-    ? // The client logs each publish at info and its payload at debug
-      // (linagora/rabbitmq-client#25): its warnings only.
-      amqpPublisher(
-        config.AMQP_URL,
-        logger.child(
-          {},
-          { level: logger.levelVal > 40 ? logger.level : 'warn' }
-        )
+    ? publisherOn(
+        // The client logs each publish at info and its payload at debug
+        // (linagora/rabbitmq-client#25): its warnings only.
+        amqpClient(
+          config.AMQP_URL,
+          logger.child(
+            {},
+            { level: logger.levelVal > 40 ? logger.level : 'warn' }
+          )
+        ),
+        ANALYTICS_EXCHANGE
       )
     : null,
   rateLimit: new RateLimit(config.ANALYTICS_BATCHES_PER_MINUTE)
