@@ -9,6 +9,8 @@ const IS_JOINED = `/_matrix/client/unstable/io.element.msc4502/rooms/${ROOM}/is_
 const CREATE = `/_matrix/client/v3/rooms/${ROOM}/state/m.room.create/`
 const POWER_LEVELS = `/_matrix/client/v3/rooms/${ROOM}/state/m.room.power_levels/`
 const DISPLAY_NAME = `/_matrix/client/v3/profile/${ALICE}/displayname`
+const DIRECT = `/_matrix/client/v3/user/${ALICE}/account_data/m.direct`
+const JOINED_MEMBERS = `/_matrix/client/v3/rooms/${ROOM}/joined_members`
 
 let answers: Record<string, () => { status: number; body: unknown }> = {}
 const seen: {
@@ -144,5 +146,62 @@ describe('Homeserver', () => {
 
     answers = {}
     expect(await homeserver.displayName(ALICE)).toBeNull()
+  })
+
+  it('reads the direct rooms of m.direct as the user, none without it', async () => {
+    answers[DIRECT] = ok({
+      '@bob:example.org': [ROOM, '!older:example.org'],
+      '@carol:example.org': ['!other:example.org'],
+      '@odd:example.org': 'no list'
+    })
+    expect(await homeserver.directRooms(ALICE)).toEqual(
+      new Set([ROOM, '!older:example.org', '!other:example.org'])
+    )
+    expect(seen[0]?.query).toEqual({ user_id: ALICE })
+
+    answers = {}
+    expect(await homeserver.directRooms(ALICE)).toEqual(new Set())
+  })
+
+  it('takes a refusal of the homeserver for no room, but not a failure', async () => {
+    // A user the homeserver has no account of
+    answers[DIRECT] = () => ({ status: 403, body: { errcode: 'M_FORBIDDEN' } })
+    expect(await homeserver.directRooms(ALICE)).toEqual(new Set())
+    answers[JOINED_MEMBERS] = () => ({ status: 400, body: {} })
+    expect(await homeserver.joinedMembers(ROOM, ALICE)).toBeNull()
+
+    // The as_token, a rate limit and an error end without the request changing
+    for (const status of [401, 429, 500]) {
+      answers[DIRECT] = () => ({ status, body: {} })
+      answers[JOINED_MEMBERS] = () => ({ status, body: {} })
+      await expect(homeserver.directRooms(ALICE)).rejects.toBeInstanceOf(
+        UpstreamError
+      )
+      await expect(
+        homeserver.joinedMembers(ROOM, ALICE)
+      ).rejects.toBeInstanceOf(UpstreamError)
+    }
+  })
+
+  it('reads the joined members as the user, null when the homeserver refuses', async () => {
+    answers[JOINED_MEMBERS] = ok({
+      joined: { [ALICE]: { display_name: 'Alice' }, '@bob:example.org': {} }
+    })
+    expect(await homeserver.joinedMembers(ROOM, ALICE)).toEqual([
+      ALICE,
+      '@bob:example.org'
+    ])
+    expect(seen[0]?.query).toEqual({ user_id: ALICE })
+
+    answers[JOINED_MEMBERS] = () => ({
+      status: 403,
+      body: { errcode: 'M_FORBIDDEN' }
+    })
+    expect(await homeserver.joinedMembers(ROOM, ALICE)).toBeNull()
+
+    answers[JOINED_MEMBERS] = () => ({ status: 500, body: {} })
+    await expect(homeserver.joinedMembers(ROOM, ALICE)).rejects.toBeInstanceOf(
+      UpstreamError
+    )
   })
 })

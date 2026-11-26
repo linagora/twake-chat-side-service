@@ -4,6 +4,14 @@ const MODERATOR_POWER_LEVEL = 50
 /** From this room version, the creators hold the power of `m.room.create`, not a level in `m.room.power_levels`. */
 const CREATORS_FROM_ROOM_VERSION = 12
 
+/**
+ * Whether the homeserver refuses the request itself, which it would refuse again: not
+ * the `as_token` (401) nor a rate limit (429), which an operator or time ends.
+ */
+function isRefused(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 401 && status !== 429
+}
+
 /** The homeserver, read with the `as_token` of the registration: no admin token. */
 export class Homeserver {
   #url: string
@@ -69,6 +77,49 @@ export class Homeserver {
     return typeof body.displayname === 'string' && body.displayname
       ? body.displayname
       : null
+  }
+
+  /**
+   * The rooms the user holds as direct conversations: `m.direct` of their account data,
+   * read as the user. Empty when they hold none, or when the homeserver refuses, as it
+   * does for a user it has no account of.
+   */
+  async directRooms(userId: string): Promise<Set<string>> {
+    const path = `/_matrix/client/v3/user/${encodeURIComponent(userId)}/account_data/m.direct`
+    const response = await this.#get(path, { user_id: userId })
+    if (isRefused(response.status)) {
+      return new Set()
+    }
+    const body = await readJson('homeserver', path, response)
+
+    return new Set(
+      Object.values(body).flatMap(rooms =>
+        Array.isArray(rooms)
+          ? rooms.filter(room => typeof room === 'string')
+          : []
+      )
+    )
+  }
+
+  /**
+   * The joined members of a room, read as a user. Synapse answers an application service
+   * for any room one of its users is in, whoever it acts as: the caller checks who is
+   * in the list. Null when the homeserver refuses, as for a room none of them is in.
+   */
+  async joinedMembers(
+    roomId: string,
+    userId: string
+  ): Promise<string[] | null> {
+    const path = `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`
+    const response = await this.#get(path, { user_id: userId })
+    if (isRefused(response.status)) {
+      return null
+    }
+    const { joined } = await readJson('homeserver', path, response)
+
+    return typeof joined === 'object' && joined !== null
+      ? Object.keys(joined)
+      : []
   }
 
   /** The state event as the user sees it (`format=event`, for the sender), null when the room has none. */
