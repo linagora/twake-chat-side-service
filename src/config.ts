@@ -33,6 +33,8 @@ const configSchema = z
     LDAP_UID_ATTRIBUTE: z.string().min(1).default('uid'),
     LDAP_ORG_ATTRIBUTE: z.string().min(1).optional(),
     AMQP_URL: url(/^amqps?$/).optional(),
+    HS_TOKEN: z.string().min(1).optional(),
+    ACTIVITY_EXCHANGE: z.string().min(1).default('activity'),
     ASSISTANTS_URL: url(/^https?$/).optional(),
     ASSISTANTS_TOKEN_URL: url(/^https?$/).optional(),
     ASSISTANTS_CLIENT_ID: z.string().min(1).optional(),
@@ -52,6 +54,11 @@ const configSchema = z
   .refine(env => !env.LDAP_BIND_DN || env.LDAP_BIND_PASSWORD, {
     path: ['LDAP_BIND_PASSWORD'],
     message: 'required with LDAP_BIND_DN'
+  })
+  // The events Synapse sends have nowhere to go without a broker
+  .refine(env => !env.HS_TOKEN || env.AMQP_URL, {
+    path: ['AMQP_URL'],
+    message: 'required with HS_TOKEN'
   })
   .superRefine((env, ctx) => {
     for (const group of GROUPS) {

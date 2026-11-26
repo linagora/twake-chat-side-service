@@ -19,6 +19,7 @@ describe('loadConfig', () => {
     expect(loadConfig(REQUIRED)).toEqual({
       ...REQUIRED,
       LDAP_UID_ATTRIBUTE: 'uid',
+      ACTIVITY_EXCHANGE: 'activity',
       ASSISTANTS_SCOPE: 'openid',
       ASSISTANTS_REQUESTS_PER_MINUTE: 60,
       ANALYTICS_BATCHES_PER_MINUTE: 60,
@@ -42,6 +43,20 @@ describe('loadConfig', () => {
     })
     expect(() => loadConfig({ ...REQUIRED, AMQP_URL: 'http://x' })).toThrow(
       'AMQP_URL'
+    )
+  })
+
+  it('receives the events of Synapse with a broker only', () => {
+    expect(
+      loadConfig({
+        ...REQUIRED,
+        HS_TOKEN: 'hs',
+        AMQP_URL: 'amqp://rabbitmq:5672',
+        ACTIVITY_EXCHANGE: 'activity-test'
+      })
+    ).toMatchObject({ HS_TOKEN: 'hs', ACTIVITY_EXCHANGE: 'activity-test' })
+    expect(() => loadConfig({ ...REQUIRED, HS_TOKEN: 'hs' })).toThrow(
+      'AMQP_URL: required with HS_TOKEN'
     )
   })
 

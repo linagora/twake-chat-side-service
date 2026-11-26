@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { RabbitMQClient } from '@linagora/rabbitmq-client'
-import type { Logger } from 'pino'
 import { z } from 'zod'
 import { type RateLimit, tokenOf } from './assistants.ts'
+import type { Publisher } from './broker.ts'
 import { corsFor, type HttpServer, matrixError, sendFailure } from './http.ts'
 import { type OpenId, openIdUser } from './openid.ts'
 
 export const ANALYTICS_PATH = '/analytics/events'
 
-const EXCHANGE = 'user-activity'
+/** The bridge declares the exchange (durable topic); the client declares it the same way. */
+export const ANALYTICS_EXCHANGE = 'user-activity'
 const TYPE = 'com.twake.chat.user.active.v1'
 
 /** An event older than this, or further in the future than the skew, is dropped. */
@@ -31,29 +31,14 @@ export interface AnalyticsDeps {
   /** The homeserver whose users are served. */
   serverName: string
   openId: Pick<OpenId, 'userOf'>
-  /** None when the deployment publishes no analytics: the route answers 202 and does nothing. */
+  /**
+   * What reaches the `user-activity` exchange of the bridge. None when the deployment
+   * publishes no analytics: the route answers 202 and does nothing.
+   */
   publisher: Publisher | null
   /** The batches of each user: a 429 past it drops that user's batch only. */
   rateLimit: Pick<RateLimit, 'take'>
   now?: () => number
-}
-
-/** What reaches the `user-activity` exchange of the bridge. */
-export interface Publisher {
-  publish(
-    routingKey: string,
-    event: Record<string, unknown>,
-    messageId: string
-  ): Promise<void>
-}
-
-/** The bridge declares the exchange (durable topic); the client declares it the same way. */
-export function amqpPublisher(url: string, logger: Logger): Publisher {
-  const client = new RabbitMQClient({ url, publishMaxAttempts: 2, logger })
-  return {
-    publish: (routingKey, event, messageId) =>
-      client.publish(EXCHANGE, routingKey, event, { messageId })
-  }
 }
 
 const body = z.object({

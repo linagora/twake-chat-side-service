@@ -2,8 +2,10 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createLogger } from '@linagora/twake-node-telemetry'
 import * as Sentry from '@sentry/node'
 import postgres from 'postgres'
-import { amqpPublisher, registerAnalytics } from './analytics.ts'
+import { ChatActivity } from './activity.ts'
+import { ANALYTICS_EXCHANGE, registerAnalytics } from './analytics.ts'
 import { RateLimit, registerAssistants } from './assistants.ts'
+import { amqpClient, publisherOn } from './broker.ts'
 import { CallRooms } from './call-rooms.ts'
 import { loadConfig } from './config.ts'
 import { Directory } from './directory.ts'
@@ -16,6 +18,7 @@ import { OpenId } from './openid.ts'
 import { registerPublicPages } from './public-pages.ts'
 import { RoomReader } from './room-reader.ts'
 import { registerSfuGet } from './sfu-get.ts'
+import { registerTransactions } from './transactions.ts'
 
 // Readiness answers 503 this long before the server closes, so the load
 // balancer stops routing here first. Both fit the default 30 s grace period.
@@ -65,10 +68,19 @@ const directory = new Directory({
   uidAttribute: config.LDAP_UID_ATTRIBUTE,
   ...(config.LDAP_ORG_ATTRIBUTE && { orgAttribute: config.LDAP_ORG_ATTRIBUTE })
 })
+const homeserver = new Homeserver(config.MATRIX_HOMESERVER_URL, config.AS_TOKEN)
+const broker = config.AMQP_URL
+  ? // The client logs each publish at info and its payload at debug
+    // (linagora/rabbitmq-client#25): its warnings only.
+    amqpClient(
+      config.AMQP_URL,
+      logger.child({}, { level: logger.levelVal > 40 ? logger.level : 'warn' })
+    )
+  : null
 registerSfuGet(server, {
   serverName: config.MATRIX_SERVER_NAME,
   openId,
-  homeserver: new Homeserver(config.MATRIX_HOMESERVER_URL, config.AS_TOKEN),
+  homeserver,
   directory,
   meet: new Meet({
     url: config.MEET_URL,
@@ -81,19 +93,20 @@ registerSfuGet(server, {
 registerAnalytics(server, {
   serverName: config.MATRIX_SERVER_NAME,
   openId,
-  publisher: config.AMQP_URL
-    ? // The client logs each publish at info and its payload at debug
-      // (linagora/rabbitmq-client#25): its warnings only.
-      amqpPublisher(
-        config.AMQP_URL,
-        logger.child(
-          {},
-          { level: logger.levelVal > 40 ? logger.level : 'warn' }
-        )
-      )
-    : null,
+  publisher: broker ? publisherOn(broker, ANALYTICS_EXCHANGE) : null,
   rateLimit: new RateLimit(config.ANALYTICS_BATCHES_PER_MINUTE)
 })
+if (config.HS_TOKEN && broker) {
+  registerTransactions(server, {
+    hsToken: config.HS_TOKEN,
+    activity: new ChatActivity({
+      serverName: config.MATRIX_SERVER_NAME,
+      homeserver,
+      directory,
+      publisher: publisherOn(broker, config.ACTIVITY_EXCHANGE)
+    })
+  })
+}
 const {
   ASSISTANTS_URL: url,
   ASSISTANTS_TOKEN_URL: tokenUrl,

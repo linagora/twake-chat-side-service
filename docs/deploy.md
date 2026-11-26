@@ -66,6 +66,10 @@ override must keep the `--import`, or Sentry gets nothing.
   the ingress is required before they are exposed.
 - `POST /analytics/events`: the product analytics of Twake Chat (see
   [Analytics](#analytics)), with the OpenID token like the routes above.
+- `PUT /_matrix/app/v1/transactions/<txnId>`: the events of the rooms, sent by
+  Synapse alone with the `hs_token` (see [Activity](#activity)). Served with
+  `HS_TOKEN` only. It shares the port of the public routes: the ingress must
+  not route `/_matrix/app/` to the service.
 - Liveness: `GET /health/live`.
 - Readiness: `GET /health/ready`, 503 while Postgres does not answer within
   2 seconds.
@@ -88,16 +92,22 @@ All required unless a default is given.
 - `MEET_SERVICE_ACCOUNT_EMAIL`: the owner of the Meet rooms of the calls.
 - `LDAP_URL`, `LDAP_BASE`: the directory, and where its users are.
 - `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`: a bind that may read `mail`,
-  `twakeWorkspaceUrl` and `workspaceUrl`, anonymous when unset. The password
-  is required with a DN.
+  `twakeWorkspaceUrl` and `workspaceUrl`, and for the
+  [activity](#activity) `entryUUID` and the organization attribute, anonymous
+  when unset. The password is required with a DN.
 - `LDAP_ORG_ATTRIBUTE` (optional): the attribute that holds the id of the
-  organization of the user, read with the directory entry. The analytics no
-  longer use it.
+  organization of the user, read with the directory entry. It becomes the
+  `twakeorg` of the [activity](#activity), which needs it wherever people
+  belong to an organization; the analytics no longer use it.
 - `LDAP_UID_ATTRIBUTE`: the attribute that holds the Matrix localpart, `uid`
   by default.
-- `AMQP_URL` (optional, secret): the RabbitMQ of twake-user-activity, for
+- `AMQP_URL` (optional, secret): the RabbitMQ of the platform, for
   example `amqp://user:secret@rabbitmq:5672`. Without it, the analytics route
   answers 202 and publishes nothing.
+- `HS_TOKEN` (optional, secret): the `hs_token` of the registration, to receive
+  the events of Synapse and publish the [activity](#activity). It needs
+  `AMQP_URL`. Without it, the transactions route answers 404.
+- `ACTIVITY_EXCHANGE`: the exchange of the activity, `activity` by default.
 - `ASSISTANTS_URL`, `ASSISTANTS_TOKEN_URL`, `ASSISTANTS_CLIENT_ID`,
   `ASSISTANTS_CLIENT_SECRET`: all four or none, to serve the assistants (see
   [Assistants](#assistants)). Without them, the assistant routes answer 404.
@@ -273,6 +283,69 @@ the `user-activity` exchange, where twake-user-activity forwards it to PostHog.
   the first publish. The bridge must have started once, or the exchange routes
   to no queue. Readiness does not depend on the broker.
 
+## Activity
+
+With `HS_TOKEN`, `AMQP_URL` and a `url` in the registration, Synapse sends the
+service the events of every room a user of the homeserver is in, and the
+service tells the platform about them: CloudEvents on the `activity` exchange,
+which twake-webhook-gateway forwards to the webhooks people subscribed, such
+as the triggers of n8n.
+
+- `com.twake.chat.message.created.v1`: a message (`m.room.message`) in a direct
+  conversation. The room counts two joined members, and one of them, on this
+  homeserver, holds it in `m.direct`, as Twake Chat does for a direct
+  conversation. The recipient is the other person.
+- `com.twake.chat.message.mentioned.v1`: a message that mentions people in
+  `m.mentions.user_ids`, in any room. The recipients are the mentioned members
+  of the room, the first 50. « @room » tells no one, and neither does a client
+  that fills no `m.mentions`: the text of a message is never read.
+- An event carries ids only: the Matrix event as `data.object` (`type`
+  `message`), its room as the `container` (`kind` `direct` or `room`), the
+  sender as `twakeactorid` and the recipients, each with its `uuid` and its
+  `reason` (`direct` or `mentioned`). Never the text, a name or an address. A
+  subscriber reads the message from Synapse with its own token.
+- People are named by the `entryUUID` of their directory entry. A user of
+  another homeserver, or one without an entry or whose `entryUUID` the bind
+  cannot read, is no recipient: without any, nothing is published, and no
+  error says so.
+- An event belongs to one organization (`LDAP_ORG_ATTRIBUTE`, none for the
+  people without one): people of several organizations get one event each
+  organization, as the gateway only matches a subscription of the organization
+  of the event. The attribute must hold, in a single value, what the SSO puts
+  in the `org_id` claim the gateway reads. Otherwise the events match no
+  subscription, and no error says so.
+- The gateway also delivers an event to its sender: a subscriber tells a
+  mention it made by `twakeactorid`.
+- Not published: an encrypted message (the service cannot tell a message from
+  an edit or a mention), an edit, a request of device verification, a message
+  sent from another homeserver, a message sent to a direct conversation before
+  the other person joined it, and anything else that happens in a room.
+- The id of an event is derived from the Matrix event, its type and its
+  organization: an event Synapse sends twice is published under the same id,
+  which the consumers deduplicate on.
+- Synapse sends a transaction again until it is answered 200, later each time
+  and for as long as it takes, and sends nothing else meanwhile. The service
+  answers 502 for what ends by itself only: a failure of the homeserver (an
+  error, no answer, its `as_token` refused), of the directory or of the
+  broker. No event is lost then, and Synapse keeps them while the service is
+  down. A request the homeserver refuses (a room or a user it does not know)
+  and an event the service fails on for any other reason are skipped, the
+  latter with an `event skipped` error in the logs.
+- With a `url` in the registration and no `HS_TOKEN`, the service answers 404
+  to every transaction, which Synapse keeps and sends again without end: set
+  both or none.
+- Each replica remembers the members of a room, `m.direct` of a user for a
+  minute, and a directory entry for 10 minutes. The replica that receives a
+  membership forgets the members of the room and the `m.direct` of its people
+  at once; the others only after the minute. So for up to a minute, a room
+  just made direct may not count, and someone who just left a room may still
+  be told of a mention.
+- The broker user must be allowed to publish on the exchange, which is
+  declared as a durable topic exchange at the first publish. The gateway must
+  have started once, or the exchange routes to no queue and the events are
+  lost. The gateway needs `"chat":{"source":"twake://chat"}` in its
+  `PUBLISHERS`.
+
 ## Public pages
 
 A room has a read-only web page at `/b/<slug>` (its local alias) or
@@ -330,6 +403,11 @@ experimental_features:
 
 - Synapse reads the registration at startup only: restart it after any
   change.
+- For the [activity](#activity), set `url` to the address of the service as
+  Synapse reaches it and give the service the same `hs_token` as `HS_TOKEN`.
+  Synapse then sends it every event of the rooms its local users are in, the
+  encrypted ones as they are, and asks it about the local users it does not
+  know, which the service answers 404. With `url: null`, Synapse sends nothing.
 - Only Synapse reads `id` and `sender_localpart`: a registration made with
   other values, such as `twake-chat-visio`, keeps working. To rename it, edit
   the file Synapse loads and restart it. Never list the old and the new file
