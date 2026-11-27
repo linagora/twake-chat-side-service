@@ -68,7 +68,7 @@ beforeEach(() => {
 })
 
 describe('Meet', () => {
-  it('creates a restricted room as the service account', async () => {
+  it('creates a restricted room as the service account, which any participant records', async () => {
     expect(await meet.createRoom()).toBe('meet-1')
     expect(seen).toEqual([
       {
@@ -83,7 +83,10 @@ describe('Meet', () => {
       },
       {
         path: '/external-api/v1.0/rooms/',
-        body: { access_level: 'restricted' },
+        body: {
+          access_level: 'restricted',
+          configuration: { screen_recording_permission: 'authenticated' }
+        },
         authorization: 'Bearer token-of-calls@example.org'
       }
     ])
