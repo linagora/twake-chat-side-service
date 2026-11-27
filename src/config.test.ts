@@ -45,6 +45,19 @@ describe('loadConfig', () => {
     )
   })
 
+  it('reads the token of the Synapse stats, optional', () => {
+    expect(loadConfig(REQUIRED)).not.toHaveProperty('SERVER_STATS_TOKEN')
+    expect(
+      loadConfig({
+        ...REQUIRED,
+        SERVER_STATS_TOKEN: 's3cr3t-0f-the-phone-home'
+      })
+    ).toMatchObject({ SERVER_STATS_TOKEN: 's3cr3t-0f-the-phone-home' })
+    expect(
+      loadConfig({ ...REQUIRED, SERVER_STATS_TOKEN: '' })
+    ).not.toHaveProperty('SERVER_STATS_TOKEN')
+  })
+
   it('takes an empty variable as unset', () => {
     expect(loadConfig({ ...REQUIRED, HTTP_PORT: '' }).HTTP_PORT).toBe(8080)
   })

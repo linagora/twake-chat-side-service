@@ -92,7 +92,8 @@ registerAnalytics(server, {
         )
       )
     : null,
-  rateLimit: new RateLimit(config.ANALYTICS_BATCHES_PER_MINUTE)
+  rateLimit: new RateLimit(config.ANALYTICS_BATCHES_PER_MINUTE),
+  serverStatsToken: config.SERVER_STATS_TOKEN
 })
 const {
   ASSISTANTS_URL: url,

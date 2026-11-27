@@ -64,6 +64,8 @@ override must keep the `--import`, or Sentry gets nothing.
   credential (see [Public pages](#public-pages)). They have no rate limit of
   their own and a request may cost several reads of Synapse: a limit per IP at
   the ingress is required before they are exposed.
+- `POST /analytics/server-stats/<token>`: the usage stats of Synapse, without
+  OpenID (see [Analytics](#analytics)).
 - `POST /analytics/events`: the product analytics of Twake Chat (see
   [Analytics](#analytics)), with the OpenID token like the routes above.
 - Liveness: `GET /health/live`.
@@ -108,6 +110,9 @@ All required unless a default is given.
 - `ANALYTICS_BATCHES_PER_MINUTE`: the analytics batches a user may send per
   minute and replica, 60 by default. Twake Chat sends at most one every 5 seconds per
   open tab, and one when a tab is hidden.
+- `SERVER_STATS_TOKEN` (optional, secret): the secret in the path of
+  `POST /analytics/server-stats/<token>`, where Synapse reports its usage (see
+  [Analytics](#analytics)). Without it, that route answers 404.
 - `PUBLIC_PAGES_URL`, `CHAT_URL`: both or none, to serve the public pages: the
   public address of this service, for the links of the pages and the sitemap,
   and the address of Twake Chat, where « React in Twake Chat » opens the room.
@@ -337,3 +342,24 @@ experimental_features:
   `as_token`.
 - The registration lets the `as_token` act as any local user (the `users`
   namespace is `@.*`). Keep it as secret as an admin token.
+
+### Synapse usage stats
+
+`POST /analytics/server-stats/<token>` takes the phone-home report of Synapse
+(every 3 hours, JSON, no authentication) and publishes one CloudEvent
+`server_stats_reported` (category `background`, no platform, actor or visit) on
+the same exchange. It is served only when `SERVER_STATS_TOKEN` is set; a wrong
+token answers 404, a `homeserver` other than `MATRIX_SERVER_NAME` answers 403,
+a missing or invalid `timestamp` answers 400, otherwise 202 at once. The event
+time is the `timestamp` of Synapse; the properties are the numeric usage counters
+(users, rooms, messages, r30v2) and the `deployment`, never the technical fields.
+
+In `homeserver.yaml`:
+
+```yaml
+report_stats: true
+report_stats_endpoint: https://<side service>/analytics/server-stats/<token>
+```
+
+The body of `POST /analytics/events` also takes an optional `platform`
+(`web`, `desktop` or `mobile`); any other value is read as `web`.

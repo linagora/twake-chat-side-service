@@ -1,9 +1,15 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { RabbitMQClient } from '@linagora/rabbitmq-client'
 import type { Logger } from 'pino'
 import { z } from 'zod'
 import { type RateLimit, tokenOf } from './assistants.ts'
-import { corsFor, type HttpServer, matrixError, sendFailure } from './http.ts'
+import {
+  corsFor,
+  type HttpServer,
+  matrixError,
+  STATS_PATH,
+  sendFailure
+} from './http.ts'
 import { type OpenId, openIdUser } from './openid.ts'
 
 export const ANALYTICS_PATH = '/analytics/events'
@@ -35,6 +41,8 @@ export interface AnalyticsDeps {
   publisher: Publisher | null
   /** The batches of each user: a 429 past it drops that user's batch only. */
   rateLimit: Pick<RateLimit, 'take'>
+  /** The secret of the Synapse stats route: none, and the route answers 404. */
+  serverStatsToken?: string | null | undefined
   now?: () => number
 }
 
@@ -61,6 +69,8 @@ const body = z.object({
   version: z.string().min(1).max(64),
   /** The random id of a visit: an invalid one is ignored, never a 400. */
   visit: z.uuidv4().optional().catch(undefined),
+  /** The app the client runs on: anything else is the web. */
+  platform: z.enum(['web', 'desktop', 'mobile']).catch('web'),
   events: z.array(z.unknown()).max(MAX_EVENTS)
 })
 
@@ -71,6 +81,52 @@ const event = z.object({
   view: z.string().min(1).max(MAX_STRING).optional().catch(undefined),
   at: z.iso.datetime({ offset: true })
 })
+
+/** What Synapse reports of its usage (`report_stats`): only these counters are published. */
+const STATS_COUNTERS = [
+  'total_users',
+  'daily_user_type_native',
+  'daily_user_type_bridged',
+  'daily_user_type_guest',
+  'total_room_count',
+  'daily_active_users',
+  'monthly_active_users',
+  'daily_active_e2ee_rooms',
+  'daily_e2ee_messages',
+  'daily_sent_e2ee_messages',
+  'daily_active_rooms',
+  'daily_messages',
+  'daily_sent_messages',
+  'r30v2_users_all',
+  'r30v2_users_android',
+  'r30v2_users_ios',
+  'r30v2_users_electron',
+  'r30v2_users_web'
+] as const
+
+/** Seconds since the epoch, as Synapse sends them. */
+const stats = z.looseObject({
+  timestamp: z
+    .number()
+    .min(0)
+    .max(8.64e12 / 1000)
+})
+
+/** The numeric counters of the whitelist, nothing else. */
+function counters(stats: Record<string, unknown>): Record<string, number> {
+  const found: Record<string, number> = {}
+  for (const key of STATS_COUNTERS) {
+    const value = stats[key]
+    if (typeof value === 'number') found[key] = value
+  }
+  return found
+}
+
+/** Compared by digest: the length of the token and the time of the check tell nothing. */
+function sameToken(given: string, expected: string): boolean {
+  const digest = (text: string) => createHash('sha256').update(text).digest()
+  return timingSafeEqual(digest(given), digest(expected))
+}
 
 type Scalar = string | number | boolean | null
 
@@ -121,6 +177,37 @@ export function registerAnalytics(app: HttpServer, deps: AnalyticsDeps): void {
     reportLost()
     done()
   })
+  /** Not awaited: the answer never waits for the broker. False when the backlog is full. */
+  const enqueue = (
+    publisher: Publisher,
+    log: Logger,
+    time: string,
+    data: Record<string, unknown>
+  ): boolean => {
+    if (pending >= MAX_PENDING) return false
+    const id = randomUUID()
+    pending += 1
+    publisher
+      .publish(
+        TYPE,
+        {
+          specversion: '1.0',
+          id,
+          source: 'twake://chat',
+          type: TYPE,
+          time,
+          data
+        },
+        id
+      )
+      .catch((err: unknown) => {
+        log.warn({ err, id }, 'analytics event lost')
+      })
+      .finally(() => {
+        pending -= 1
+      })
+    return true
+  }
   app.options(ANALYTICS_PATH, { onSend: cors }, (_request, reply) =>
     reply.code(204).send()
   )
@@ -168,47 +255,60 @@ export function registerAnalytics(app: HttpServer, deps: AnalyticsDeps): void {
     const dropped = parsed.data.events.length - events.length
     if (dropped > 0)
       request.log.warn({ user, dropped }, 'analytics events dropped')
-    // Not awaited: the answer never waits for the broker.
     // Anonymous: the event carries nothing of the user.
     for (const [index, event] of events.entries()) {
-      if (pending >= MAX_PENDING) {
+      const sent = enqueue(publisher, request.log, event.at, {
+        ...(parsed.data.visit && { visit: parsed.data.visit }),
+        category: 'foreground',
+        action: event.name,
+        platform: parsed.data.platform,
+        properties: {
+          ...scalars(event.properties),
+          ...(event.view && { view: event.view }),
+          appVersion: parsed.data.version,
+          // After the client properties: the server wins.
+          deployment: deps.serverName
+        }
+      })
+      if (!sent) {
         lost += events.length - index
         break
       }
-      const id = randomUUID()
-      pending += 1
-      publisher
-        .publish(
-          TYPE,
-          {
-            specversion: '1.0',
-            id,
-            source: 'twake://chat',
-            type: TYPE,
-            time: event.at,
-            data: {
-              ...(parsed.data.visit && { visit: parsed.data.visit }),
-              category: 'foreground',
-              action: event.name,
-              platform: 'web',
-              properties: {
-                ...scalars(event.properties),
-                ...(event.view && { view: event.view }),
-                appVersion: parsed.data.version,
-                // After the client properties: the server wins.
-                deployment: deps.serverName
-              }
-            }
-          },
-          id
-        )
-        .catch((err: unknown) => {
-          request.log.warn({ err, id }, 'analytics event lost')
-        })
-        .finally(() => {
-          pending -= 1
-        })
     }
     return reply.code(202).send()
   })
+  const { serverStatsToken } = deps
+  if (!serverStatsToken) return
+  // Synapse sends no authorization: the secret is in the path, and a wrong one looks absent.
+  app.post<{ Params: { token: string } }>(
+    `${STATS_PATH}/:token`,
+    async (request, reply) => {
+      if (!sameToken(request.params.token, serverStatsToken))
+        return reply.code(404).send()
+      const parsed = stats.safeParse(request.body)
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send(matrixError('M_INVALID_PARAM', 'Invalid timestamp'))
+      if (parsed.data.homeserver !== deps.serverName)
+        return reply
+          .code(403)
+          .send(matrixError('M_FORBIDDEN', 'Not the stats of this homeserver'))
+      if (deps.publisher)
+        enqueue(
+          deps.publisher,
+          request.log,
+          new Date(parsed.data.timestamp * 1000).toISOString(),
+          {
+            category: 'background',
+            action: 'server_stats_reported',
+            properties: {
+              ...counters(parsed.data),
+              deployment: deps.serverName
+            }
+          }
+        )
+      return reply.code(202).send()
+    }
+  )
 }

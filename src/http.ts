@@ -69,6 +69,17 @@ function clientErrcode(status: number, code: string | undefined): string {
   return status === 413 ? 'M_TOO_LARGE' : 'M_UNKNOWN'
 }
 
+/** The route that carries the Synapse stats secret in its path. */
+export const STATS_PATH = '/analytics/server-stats'
+
+/** The url the logs may carry: the secret segment of the stats route is masked. */
+function loggableUrl(url: string): string {
+  const secret = `${STATS_PATH}/`
+  return url.startsWith(secret)
+    ? `${secret}<redacted>${url.slice(secret.length).replace(/^[^?#]*/, '')}`
+    : url
+}
+
 export function createServer(deps: {
   logger: Logger
   isReady: () => Promise<boolean>
@@ -80,7 +91,7 @@ export function createServer(deps: {
         serializers: {
           req: (request: FastifyRequest) => ({
             method: request.method,
-            url: request.url,
+            url: loggableUrl(request.url),
             remoteAddress: request.ip
           })
         }

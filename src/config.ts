@@ -40,6 +40,7 @@ const configSchema = z
     ASSISTANTS_SCOPE: z.string().min(1).default('openid'),
     ASSISTANTS_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).default(60),
     ANALYTICS_BATCHES_PER_MINUTE: z.coerce.number().int().min(1).default(60),
+    SERVER_STATS_TOKEN: z.string().min(1).optional(),
     PUBLIC_PAGES_URL: url(/^https?$/).optional(),
     CHAT_URL: url(/^https?$/).optional(),
     HTTP_HOST: z.string().min(1).default('0.0.0.0'),
